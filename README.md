@@ -1,6 +1,6 @@
 # Legal Contract Intelligence Pipeline
 
-An end-to-end LLM pipeline for automated legal contract analysis on the [CUAD dataset](https://www.atticusprojectai.org/cuad). Extracts key clauses and generates structured summaries from 50 contracts using Google Gemini 1.5 Flash, with semantic search, ground-truth evaluation, and a Jupyter demo notebook.
+An end-to-end LLM pipeline for automated legal contract analysis on the [CUAD dataset](https://www.atticusprojectai.org/cuad). Extracts key clauses and generates structured summaries from 50 contracts using Groq (llama-3.3-70b-versatile), with semantic search, ground-truth evaluation, and a Jupyter demo notebook.
 
 ---
 
@@ -10,14 +10,14 @@ An end-to-end LLM pipeline for automated legal contract analysis on the [CUAD da
 flowchart TD
     A["📂 CUAD Dataset\n510 legal contracts\n(50 used)"]
 
-    A -->|"HuggingFace datasets\nor local PDFs"| B
+    A -->|"Direct JSON download\nor local PDFs"| B
 
     subgraph LOAD ["1 / Load & Preprocess"]
-        B["loader.py\nHuggingFace auto-download\nor PyMuPDF PDF extraction"]
-        B --> C["preprocessor.py\n- NFKC unicode normalization\n- Control char removal\n- Soft-hyphen repair\n- Whitespace collapse\n- 800k char safety truncation"]
+        B["loader.py\nDirect HuggingFace download\nor PyMuPDF PDF extraction"]
+        B --> C["preprocessor.py\n- NFKC unicode normalization\n- Control char removal\n- Soft-hyphen repair\n- Whitespace collapse\n- 30k char safety truncation"]
     end
 
-    subgraph LLM ["2 / LLM Analysis  (Gemini 1.5 Flash / 1M token context)"]
+    subgraph LLM ["2 / LLM Analysis  (Groq / llama-3.3-70b-versatile)"]
         C --> D1["extractor.py\nClause Extraction Prompt\n- 2 few-shot examples\n- Chain-of-thought step\n- JSON mode / temp=0.1"]
         C --> D2["summarizer.py\nSummarization Prompt\n- 100-150 word target\n- Purpose / Obligations / Risks\n- temp=0.3"]
     end
@@ -43,12 +43,12 @@ flowchart TD
 
 **Core (Task 1 + 2A + 2B)**
 - PyMuPDF text extraction with unicode normalization and hyphenation repair
-- Gemini 1.5 Flash clause extraction: Termination, Confidentiality, Liability
+- Groq (llama-3.3-70b-versatile) clause extraction: Termination, Confidentiality, Liability
 - Structured 100-150 word summaries: Purpose -> Obligations -> Risks
 - CSV + JSON output with standardized schema
 
 **Prompt Engineering Highlights**
-- `<<<CONTRACT_TEXT>>>` placeholder with safe `.replace()` substitution - immune to `{curly braces}` in legal templates (avoids `KeyError`)
+- `<<<CONTRACT_TEXT>>>` placeholder with safe `.replace()` substitution — immune to `{curly braces}` in legal templates (avoids `KeyError`)
 - Two few-shot examples per extraction prompt (multi-shot outperforms single-shot for edge-case clauses)
 - Chain-of-thought reasoning step instructs the model to locate relevant sections before extracting
 - Separate temperature settings: `0.1` for extraction (deterministic) vs `0.3` for summaries (fluent)
@@ -56,7 +56,7 @@ flowchart TD
 **Bonus Features**
 - Semantic search: `sentence-transformers/all-MiniLM-L6-v2` + ChromaDB cosine index
 - Ground-truth evaluation: Token F1 scoring against CUAD annotations (`evaluator.py`)
-- Exponential backoff retry (2s -> 4s -> 8s) + `NOT_FOUND` / `EXTRACTION_FAILED` sentinels
+- Exponential backoff retry (2s → 4s → 8s) + `NOT_FOUND` / `EXTRACTION_FAILED` sentinels
 - Jupyter demo notebook (`notebook.ipynb`)
 
 ---
@@ -69,7 +69,7 @@ legal-contract-intelligence/
   pipeline.py          # Orchestration + output persistence
   config.py            # All configuration (env-overridable)
   prompts.py           # Prompt templates + safe fill() substitution
-  loader.py            # CUAD (HuggingFace) + PDF loading
+  loader.py            # CUAD (direct download) + PDF loading
   preprocessor.py      # Text normalization pipeline
   extractor.py         # LLM clause extraction (JSON mode)
   summarizer.py        # LLM contract summarization
@@ -117,17 +117,17 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Open .env and set: GEMINI_API_KEY=your_key_here
+# Open .env and set: GROQ_API_KEY=your_key_here
 ```
 
-Get a **free** Gemini API key at [ai.google.dev](https://ai.google.dev) - no billing required.
+Get a **free** Groq API key at [console.groq.com](https://console.groq.com) — no billing required. Free tier: 14,400 requests/day.
 
 ---
 
 ## Usage
 
 ```bash
-# Full run - 50 contracts from CUAD (downloads ~200 MB on first run)
+# Full run - 50 contracts from CUAD (downloads ~40 MB on first run)
 python main.py
 
 # Quick test - 5 contracts
@@ -152,8 +152,8 @@ python main.py --n 10 --search "30 days notice" --clause-type termination_clause
 python evaluator.py --results output/results.json
 ```
 
-> **First run:** CUAD downloads automatically (~200 MB). Subsequent runs use the local cache (`~/.cache/huggingface/`).
-> **Runtime:** ~8-10 minutes for 50 contracts (4s rate-limit delay per API call * 2 calls * 50 contracts).
+> **First run:** CUAD_v1.json downloads automatically (~40 MB) and is cached at `~/.cache/legal_contract_intelligence/`.
+> **Runtime:** ~20-40 minutes for 50 contracts (Groq free-tier rate limits; handled automatically with backoff retry).
 
 ---
 
@@ -175,14 +175,35 @@ Sentinels: `NOT_FOUND` (clause absent) / `EXTRACTION_FAILED` (API error after re
 
 ## Design Decisions
 
-### Why Gemini 1.5 Flash?
+### Why Groq + Llama 3.3 70B?
 
-The 1-million-token context window processes **entire legal contracts in a single API call** - no chunking required. Chunking fragments cross-section context (e.g., a liability cap defined by a termination condition in a different section), which degrades extraction accuracy. CUAD contracts range from 20,000 to ~150,000 tokens - all fit comfortably in one call.
+Groq's hardware acceleration delivers fast inference on the 70B model with a generous free tier (14,400 req/day). Contracts are truncated to 30,000 characters to stay within the token-per-minute limit while retaining the most clause-dense content. The 70B model handles legal language reliably and returns well-structured JSON via the `json_object` response format.
 
 ### Safe Prompt Substitution
 
-Standard Python `.format()` raises `KeyError` when legal text contains `{variable-like}` patterns (common in boilerplate legal templates). V2 uses a `<<<CONTRACT_TEXT>>>` placeholder with `str.replace()` substitution via the `fill()` function - completely immune to curly brace content in contracts.
+Standard Python `.format()` raises `KeyError` when legal text contains `{variable-like}` patterns (common in boilerplate legal templates). This pipeline uses a `<<<CONTRACT_TEXT>>>` placeholder with `str.replace()` substitution via the `fill()` function — completely immune to curly brace content in contracts.
 
 ### Prompt Engineering
 
-Multi-shot prompting (2 examples) outperforms single-shot for legal clause identification because legal language is highly formulaic - exa
+Multi-shot prompting (2 examples) outperforms single-shot for legal clause identification because legal language is highly formulaic — examples anchor the model to the exact clause boundaries expected. A chain-of-thought step (`"First, locate..."`) further reduces boundary errors on complex multi-section clauses.
+
+### CUAD Dataset Loading
+
+The pipeline downloads `CUAD_v1.json` directly from HuggingFace (`theatticusproject/cuad`) using `urllib.request`, bypassing the `datasets` library entirely. This avoids compatibility issues with `datasets` v3 which removed `trust_remote_code` support. The file is cached locally after the first download.
+
+---
+
+## Environment Variables
+
+All settings are overridable via `.env`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `GROQ_API_KEY` | — | **Required.** Your Groq API key |
+| `LLM_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
+| `N_CONTRACTS` | `50` | Number of contracts to process |
+| `MAX_CONTRACT_CHARS` | `30000` | Truncation limit per contract |
+| `EXTRACT_TEMP` | `0.1` | Temperature for clause extraction |
+| `SUMMARY_TEMP` | `0.3` | Temperature for summarization |
+| `MAX_RETRIES` | `3` | API retry attempts |
+| `OUTPUT_DIR` | `output` | Results directory |
