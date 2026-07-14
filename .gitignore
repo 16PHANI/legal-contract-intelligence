@@ -1,0 +1,29 @@
+# Environment — NEVER commit your API key
+.env
+
+# Pipeline output (large files, regenerate by running the pipeline)
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# HuggingFace dataset cache
+~/.cache/huggingface/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
